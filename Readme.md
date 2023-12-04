@@ -11,7 +11,19 @@ This is a documentation shared by Applied Nonlinear Control and Robotics Lab.
 Currently,the documentation is mainly edited by **Zhixing Zhang**,a 2021-Grade undergraduate of Shien-Ming Wu School of Intelligent Engineering,**South China University of Technology**
 
 3. Structure  
-
+```
+├── Code
+│   ├── catkin_franka
+│   └── Realsense
+├── Figures
+│   ├── Franka
+│   └── Realsense
+├── Markdowm
+│   ├── Franka-Control.md
+│   ├── Franka-Manipulate.md
+│   └── Realsense.md
+└── Readme.md
+```
 4. Content  
 The documentation mainly refers to the
 * **Set up of software environment** 
