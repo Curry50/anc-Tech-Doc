@@ -1,0 +1,164 @@
+import cv2
+import numpy as np
+import pyrealsense2 as rs
+import torch
+import torchvision.models as models
+import os
+import socket, struct
+from time import sleep
+
+# Load the YOLOv5 model
+# model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
+# model = torch.hub.load('/home/anc/yolov5', "custom",'./yolov5s.pt', source = 'local')
+# model = torch.hub.load('.', 'custom', path='./yolov5s.pt',device = None,source='local',force_reload=True,_verbose=True)  # local repo
+# torch.save(model,'./yolov5.pth')
+# print(torch.__version__)
+path = '/home/anc/yolov5/yolov5.pth'
+model = torch.load(path)
+pipeline = rs.pipeline()    # 定义流程pipeline，创建一个管道
+config = rs.config()    # 定义配置config
+config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 60)      # 配置depth流
+config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 60)     # 配置color流
+
+# config.enable_stream(rs.stream.depth,  848, 480, rs.format.z16, 90)
+# config.enable_stream(rs.stream.color, 848, 480, rs.format.bgr8, 30)
+
+# config.enable_stream(rs.stream.depth,  1280, 720, rs.format.z16, 30)
+# config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+
+pipe_profile = pipeline.start(config)       # streaming流开始
+
+# 创建对齐对象与color流对齐
+align_to = rs.stream.color      # align_to 是计划对齐深度帧的流类型
+align = rs.align(align_to)      # rs.align 执行深度帧与其他帧的对齐
+
+def UDP_Send(coordinate):
+    # -------------------------------- Initializing --------------------------------------------
+    # Create a socket
+    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    serveraddr = ("127.0.0.1", 9202)
+    udp_socket.connect(serveraddr)
+    count = 0
+    # Create an increment for while loop
+    send_msg_code = struct.pack("6d", float(coordinate[0]),float(coordinate[1]),1.3,1.4,1.5,1.6) #对应Simulin的六路数据接收
+    udp_socket.sendto(send_msg_code, serveraddr)
+    count += 1
+    print(send_msg_code)
+    sleep(0.001)
+    # Close the udp socket.
+    udp_socket.close()
+
+# 画 3D 坐标轴
+def draw_line(img, corners, imgpts):
+    corner = tuple(corners[0].ravel())
+    ## 注意，此处的数据一定要转化成 int32 格式，否则 OpenCV 报错
+    img = cv2.line(img, np.int32(corner), np.int32(tuple(imgpts[0].ravel())), (255, 0, 0), 5)
+    img = cv2.line(img, np.int32(corner), np.int32(tuple(imgpts[1].ravel())), (0, 255, 0), 5)
+    img = cv2.line(img, np.int32(corner), np.int32(tuple(imgpts[2].ravel())), (0, 0, 255), 5)
+    return img
+
+def get_aligned_images():
+    
+    frames = pipeline.wait_for_frames()     # 等待获取图像帧，获取颜色和深度的框架集     
+    aligned_frames = align.process(frames)      # 获取对齐帧，将深度框与颜色框对齐  
+
+    aligned_depth_frame = aligned_frames.get_depth_frame()      # 获取对齐帧中的的depth帧 
+    aligned_color_frame = aligned_frames.get_color_frame()      # 获取对齐帧中的的color帧
+
+    #### 获取相机参数 ####
+    depth_intrin = aligned_depth_frame.profile.as_video_stream_profile().intrinsics     # 获取深度参数（像素坐标系转相机坐标系会用到）
+    color_intrin = aligned_color_frame.profile.as_video_stream_profile().intrinsics    # 获取相机内参
+    global depth_cam_matrix,depth_dist_coeff
+    depth_cam_matrix=np.array([
+                    [depth_intrin.fx,0,depth_intrin.ppx],
+                    [0,depth_intrin.fy,depth_intrin.ppy],
+                    [0,            0,             1]])  
+    depth_dist_coeff=np.array(depth_intrin.coeffs)
+
+    #### 将images转为numpy arrays ####  
+    img_color = np.asanyarray(aligned_color_frame.get_data())       # RGB图  
+    img_depth = np.asanyarray(aligned_depth_frame.get_data())       # 深度图（默认16位）
+    
+    return color_intrin, depth_intrin, img_color, img_depth, aligned_depth_frame
+
+def get_3d_camera_coordinate(depth_pixel, aligned_depth_frame, depth_intrin):
+    x = depth_pixel[0]
+    y = depth_pixel[1]
+    dis = aligned_depth_frame.get_distance(x, y)        # 获取该像素点对应的深度
+    # print ('depth: ',dis)       # 深度单位是m
+    camera_coordinate = rs.rs2_deproject_pixel_to_point(depth_intrin, depth_pixel, dis)
+    # print ('camera_coordinate: ',camera_coordinate)
+    return dis, camera_coordinate
+
+if __name__=="__main__":
+    while True:
+        ''' 
+        获取对齐图像帧与相机参数
+        '''
+        color_intrin, depth_intrin, img_color, img_depth, aligned_depth_frame = get_aligned_images()        # 获取对齐图像与相机参数
+        # Detect objects using YOLOv5
+        results = model(img_color)
+
+        # Process the results
+        for result in results.xyxy[0]:
+            x1, y1, x2, y2, confidence, class_id = result
+            # print(f"{model.names[int(class_id)]}: {class_id}")
+            if int(class_id) == 39: #41 cup,47 apple,0 person,39 bottle
+                center = [int((x1+x2)/2),int((y1+y2)/2)]
+                ''' 
+                获取随机点三维坐标
+                '''
+                depth_pixel_rightdown = (int((x2+x1)/2),int((y2+y1)/2))     # 设置随机点，以相机中心点为例
+                depth_pixel_leftup = (int((3*x1+x2)/4),int((3*y1+y2)/4))
+                depth_pixel_rightup = (int((x2+x1)/2),int((3*y1+y2)/4))
+                depth_pixel_leftdown = (int((3*x1+x2)/4),int((y2+y1)/2))
+
+                # dis, camera_coordinate_leftup = get_3d_camera_coordinate(depth_pixel_leftup, aligned_depth_frame, depth_intrin)
+                # dis, camera_coordinate_rightdown = get_3d_camera_coordinate(depth_pixel_rightdown, aligned_depth_frame, depth_intrin)
+                # dis, camera_coordinate_rightup= get_3d_camera_coordinate(depth_pixel_rightup, aligned_depth_frame, depth_intrin)
+                # dis, camera_coordinate_leftdown = get_3d_camera_coordinate(depth_pixel_leftdown, aligned_depth_frame, depth_intrin)
+                dis, camera_coordinate_center = get_3d_camera_coordinate(center, aligned_depth_frame, depth_intrin)
+
+                # corners = np.float32([depth_pixel_leftup,depth_pixel_rightup,depth_pixel_rightdown,depth_pixel_leftdown])
+                # axis = np.float32([camera_coordinate_leftup , camera_coordinate_rightup, camera_coordinate_rightdown]).reshape(-1,3)
+                # objp = np.float32([(camera_coordinate_leftup[0],camera_coordinate_leftup[1],camera_coordinate_leftup[2]),
+                #         (camera_coordinate_rightup[0],camera_coordinate_rightup[1],camera_coordinate_rightup[2]),
+                #         (camera_coordinate_rightdown[0],camera_coordinate_rightdown[1],camera_coordinate_rightdown[2]),
+                #         (camera_coordinate_leftdown[0],camera_coordinate_leftdown[1],camera_coordinate_leftdown[2])])
+                # ret,rvec,tvec = cv2.solvePnP(objp,corners,depth_cam_matrix,depth_dist_coeff,flags=cv2.SOLVEPNP_P3P)
+                # print(rvec)
+                # try:
+                #     imgpts, jac = cv2.projectPoints(axis,rvec,tvec,depth_cam_matrix, depth_dist_coeff)
+                #     img_color = draw_line(img_color, corners, imgpts)  
+                # except:
+                #     continue
+                ''' 
+                显示图像与标注
+                '''
+                #### 在图中标记随机点及其坐标 ####
+                (x1,y1,x2,y2) = (int(x1),int(y1),int(x2),int(y2))
+                (decimal,size) = (3,0.7)
+                cv2.circle(img_color, center, 8, [255,0,255], thickness=-1)
+                cv2.rectangle(img_color,(x1,y1),(x2,y2),(255,0,0),2)
+                # cv2.putText(img_color,"X2:"+str(round(camera_coordinate_rightdown[0],decimal)), (80,80), cv2.FONT_HERSHEY_SIMPLEX, size,[255,0,255])
+                # cv2.putText(img_color,"Y2:"+str(round(camera_coordinate_rightdown[1],decimal)), (240,80), cv2.FONT_HERSHEY_SIMPLEX,size,[255,0,255])
+                # cv2.putText(img_color,"Z2:"+str(round(camera_coordinate_rightdown[2],decimal)), (480,80), cv2.FONT_HERSHEY_SIMPLEX, size,[255,0,255])
+                # cv2.putText(img_color,"X1:"+str(round(camera_coordinate_leftup[0],decimal)), (80,30), cv2.FONT_HERSHEY_SIMPLEX, size,[255,0,255])
+                # cv2.putText(img_color,"Y1:"+str(round(camera_coordinate_leftup[1],decimal)), (240,30), cv2.FONT_HERSHEY_SIMPLEX, size,[255,0,255])
+                # cv2.putText(img_color,"Z1:"+str(round(camera_coordinate_leftup[2],decimal)), (480,30), cv2.FONT_HERSHEY_SIMPLEX, size,[255,0,255])
+                cv2.putText(img_color,"Xc:"+str(round(camera_coordinate_center[0],decimal)), (80,30), cv2.FONT_HERSHEY_SIMPLEX, size,[255,0,255])
+                cv2.putText(img_color,"Yc:"+str(round(camera_coordinate_center[1],decimal)), (240,30), cv2.FONT_HERSHEY_SIMPLEX, size,[255,0,255])
+                cv2.putText(img_color,"Zc:"+str(round(camera_coordinate_center[2],decimal)), (480,30), cv2.FONT_HERSHEY_SIMPLEX, size,[255,0,255])
+        #### 显示画面 ####
+        cv2.imshow('RealSence',img_color)
+        try:
+            UDP_Send(camera_coordinate_center)
+        except:
+            continue
+        key = cv2.waitKey(1)
+        if key & 0xFF == ord('q'):
+            break
+
+# Release the VideoWriter object
+cv2.destroyAllWindows()
+

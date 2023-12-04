@@ -1,0 +1,20 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/home/anc/catkin_franka/src/libfranka/src/generate_joint_position_motion.cpp
+cmath
+-
+iostream
+-
+franka/exception.h
+-
+franka/robot.h
+-
+examples_common.h
+/home/anc/catkin_franka/src/libfranka/src/examples_common.h
+

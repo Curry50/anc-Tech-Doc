@@ -1,0 +1,2 @@
+- setup-file:
+    local-name: /home/anc/catkin_franka/install/setup.sh

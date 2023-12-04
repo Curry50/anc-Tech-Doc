@@ -1,0 +1,5 @@
+<launch>
+    <arg name="robot_ip" />
+    <node name = "franka_control_node" pkg = "franka_control" type = "franka_control_node" args = "$(arg robot_ip)" output = "screen"/>
+    <node name = "franka_controller_node" pkg = "franka_control" type = "franka_controller_node" output = "screen"/>
+</launch>

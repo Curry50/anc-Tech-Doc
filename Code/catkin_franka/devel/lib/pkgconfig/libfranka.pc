@@ -1,0 +1,8 @@
+prefix=/home/anc/catkin_franka/devel
+
+Name: libfranka
+Description: Description of libfranka
+Version: 0.0.0
+Cflags: -I/home/anc/catkin_franka/devel/include
+Libs: -L${prefix}/lib 
+Requires: 
